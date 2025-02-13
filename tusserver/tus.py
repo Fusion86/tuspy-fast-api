@@ -24,6 +24,10 @@ def default_auth():
     pass
 
 
+def b64e(s):
+    return base64.b64encode(s.encode()).decode()
+
+
 def create_api_router(
     files_dir="/tmp/files",
     max_size=128849018880,
@@ -75,10 +79,10 @@ def create_api_router(
         response.headers["Upload-Length"] = str(meta.size)
         response.headers["Upload-Offset"] = str(meta.offset)
         response.headers["Cache-Control"] = "no-store"
-        response.headers["Upload-Metadata"] = (
-            f"filename {base64.b64encode(bytes(meta.metadata['name'], 'utf-8'))}, "
-            f"filetype {base64.b64encode(bytes(meta.metadata['type'], 'utf-8'))}"
-        )
+        if len(meta.metadata) > 0:
+            response.headers["Upload-Metadata"] = ", ".join(
+                [f"{k} {b64e(v)}" for k, v in meta.metadata.items()]
+            )
         response.status_code = status.HTTP_200_OK
         return response
 
@@ -131,13 +135,19 @@ def create_api_router(
         if upload_metadata is not None and upload_metadata != "":
             # Decode the base64-encoded string
             for kv in upload_metadata.split(","):
-                key, value = kv.rsplit(" ", 1)
-                decoded_value = base64.b64decode(value.strip()).decode("utf-8")
-                metadata[key.strip()] = decoded_value
+                parts = kv.rsplit(" ", 1)
+                key = parts[0].strip()
+
+                if len(parts) == 2:
+                    decoded_value = base64.b64decode(parts[1].strip()).decode("utf-8")
+                    metadata[key] = decoded_value
+                else:
+                    metadata[key] = ""
 
         uuid = str(uuid4().hex)
 
         date_expiry = datetime.now() + timedelta(days=days_to_keep)
+        # TODO: Return validation error instead of 500 Internal Server Error?
         saved_meta_data = FileMetadata.from_request(
             uuid,
             metadata,
@@ -194,7 +204,7 @@ def create_api_router(
         return FileResponse(
             os.path.join(files_dir, uuid),
             media_type="application/octet-stream",
-            filename=meta.metadata["name"],
+            filename=meta.metadata.get("filename", uuid),
             headers={"Content-Length": str(meta.offset), "Tus-Resumable": tus_version},
         )
 
